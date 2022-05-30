@@ -2,7 +2,7 @@ using NPZ,Distributions,Base.Cartesian
 
 include("instancegen.jl")
 include("heuristics.jl")
-include("intervals.jl")
+include("approx.jl")
 
 
 function run_experiments(distribution_type::String,model_type::String,logs::Bool=false)
