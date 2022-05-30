@@ -1,7 +1,9 @@
-
-function horizontal_approx(I::Instance,threshold::Int64)
+function horizontal_approx(I::Instance,threshold::Int64, iterations::Int64=100)
+  #=
+  Approximation algorithm for horizontal differentiation
+  =#
   already_captured = zeros(Float64,(I.nb_cst_type,1))
-  remaining_set = Array(threshold:I.nb_prod)
+  remaining_set = Array(I.nb_prod:-1:threshold)
 
   # Solving the static problem greedily
   for i = 1:I.capacity
@@ -25,13 +27,14 @@ function horizontal_approx(I::Instance,threshold::Int64)
     end
   end
 
-  # Optimal assortment
+  # Approximate assortment
   assortment = setdiff(Array(threshold:I.nb_prod),remaining_set)
+  # print(assortment)
   assortment_bin = zeros(1,I.nb_prod)
   assortment_bin[assortment] = 1.
 
   # List to product assignment
-  A = (ones((I.nb_cst_type,1))*assortment_bin).*I.rankings
+  A = (ones((I.nb_cst_type,1))*assortment_bin).*I.rankings.*I.consideration_sets
   assignment = transpose((findmax(transpose(A),1)[2]-1)%(I.nb_prod)+1)
   probas = max(0.0,min(map( x -> sum(I.lambdas[find(assignment.== x)]),assortment),1.0))
   # Solving the newsvendor greedily
@@ -66,17 +69,47 @@ function horizontal_approx(I::Instance,threshold::Int64)
       U[prod] = U[prod] + 1
     end
   end
-  #alpha = approximate_revenue(I,U,500)
-  alpha = exact_revenue(I,U)
-  return(alpha)
+
+  #Use static solution and round spare capacity
+  probas_n = zeros(I.nb_prod)
+  probas_n[assortment] = probas
+  U_static_scaled = probas_n*I.capacity/sum(probas_n)
+  U_static = floor(U_static_scaled)
+  if sum(U_static) < I.capacity
+      indices = sortperm(U_static_scaled - U_static,rev= true)
+      for i = 1:(I.capacity - Int(sum(U_static)))
+          ind = indices[i]
+          U_static[ind] = U_static[ind] + 1
+      end
+  end
+  U_static = map(x -> Int(x),U_static)
+  alpha = findmax(map(x->eval_revenue(I,x,iterations),[U,U_static]))[2]
+  if alpha > 1
+    return(eval_revenue(I,U_static,iterations),U_static)
+  else
+    return(eval_revenue(I,U,iterations),U)
+  end
 end
+
 
 function general_approx(I::Instance)
+  #=
+  Approximation algorithm for the general nonparametric choice model
+  =#
   tic = time()
-  return(maximum(x-> horizontal_approx(I,x),1:I.nb_prod),time() - tic)
+  sols = map(x-> horizontal_approx(I,x),1:I.nb_prod)
+  revs = map(x-> x[1],sols)
+  t = findmax(revs)
+  alpha = eval_revenue(I,sols[t[2]][2])
+  # return(maximum(x-> horizontal_approx(I,x),1:I.nb_prod)[1],time() - tic)
+  return(alpha,time() - tic)
 end
 
+
 function nested_approx(I::Instance, iterations::Int64=100)
+  #=
+  Approximation algorithm for the nested choice model
+  =#
   tic = time()
   sel =[ (threshold - 1 +findmax([sum(I.lambdas[j:I.nb_prod]) for j=threshold:I.nb_prod].*I.prices[threshold:I.nb_prod])[2]) for threshold = 1:I.nb_prod ]
   #println(sel)
@@ -91,8 +124,8 @@ function nested_approx(I::Instance, iterations::Int64=100)
       if (U[j] < I.M)
         U2 = copy(U)
         U2[j] = U2[j] + 1
-        #local_marginal = approximate_revenue(I,U2,iterations)
-        local_marginal = exact_revenue(I,U2)
+        # local_marginal = approximate_revenue(I,U2,iterations)
+        local_marginal = eval_revenue(I,U2,iterations)
         if local_marginal > marginal
           marginal = local_marginal
           prod = j
@@ -106,11 +139,15 @@ function nested_approx(I::Instance, iterations::Int64=100)
       U[I.nb_prod] = U[I.nb_prod] + 1
     end
   end
-  #return(approximate_revenue(I,U,500),time() - tic)
-  return(exact_revenue(I,U),time() - tic)
+  # return(approximate_revenue(I,U,500),time() - tic)
+  return(eval_revenue(I,U),time() - tic)
 end
 
+
 function goyal_approx(I::Instance, iterations::Int64=100)
+  #=
+  Approximation scheme by Goyal et al. for the nested choice model
+  =#
   tic = time()
   #Fix eps
   eps = 0.3
@@ -119,8 +156,10 @@ function goyal_approx(I::Instance, iterations::Int64=100)
   psi = sum((I.lambdas*ones(1,I.nb_prod)).*I.consideration_sets,1)
   i = I.nb_prod + 1
   test = 0
-  while (test == 0) & (i > 0)
+  while (test == 0) & (i > 1)
     i = i - 1
+    # println(psi[i])
+    psi[i] = min(1.0,psi[i])
     tot = mean(Binomial(1,psi[i]))
     for m  = 2:I.M
       tot = tot + (1-I.demand_cdf[m-1])*(mean(Binomial(m,psi[i])) - mean(Binomial(m-1,psi[i])))
@@ -157,7 +196,6 @@ function goyal_approx(I::Instance, iterations::Int64=100)
   end
 
   #Enumerate over vectors
-  #i_collection = sort(i_collection)[(size(i_collection,1)-4):size(i_collection,1)]
   i_collection = sort(i_collection, rev = true)
   val_max = 0.
   U_max = zeros(Int64,I.nb_prod)
@@ -173,8 +211,8 @@ function goyal_approx(I::Instance, iterations::Int64=100)
       V = floor(U/(sum(U)+0.000001)*I.capacity)
       V[findmax(U)[2]] = V[findmax(U)[2]] + I.capacity - sum(V)
       U = convert(Array{Int64},V)
-      #rev = approximate_revenue(I,U,iterations)
-      rev = exact_revenue(I,U)
+      # rev = approximate_revenue(I,U,iterations)
+      rev = eval_revenue(I,U,iterations)
       #println(U,rev)
       if  rev > val_max
         U_max = U
@@ -182,11 +220,15 @@ function goyal_approx(I::Instance, iterations::Int64=100)
       end
     end
   end
-  #return(approximate_revenue(I,U_max,500),time() - tic)
-  return(exact_revenue(I,U_max),time() - tic)
+  # return(approximate_revenue(I,U_max,500),time() - tic)
+  return(eval_revenue(I,U_max),time() - tic)
 end
 
+
 function vec_create(I::Instance, A::Array{Int64},i_collection::Array{Int64,1},eps::Float64)
+  #=
+  Auxiliary function
+  =#
   d = size(A,1)
   U_vec = zeros(Int64,I.nb_prod)
   for i=1:d
@@ -199,7 +241,11 @@ function vec_create(I::Instance, A::Array{Int64},i_collection::Array{Int64,1},ep
   return(U_vec)
 end
 
+
 function rec(x)
+  #=
+  Auxiliary function
+  =#
   if typeof(x)== Int64
     return([x[1]])
   else

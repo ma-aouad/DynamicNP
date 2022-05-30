@@ -13,14 +13,18 @@ type Instance
   consideration_sets::BitArray{2}
   rankings::Array{Float64,2}
   solution::Vector{Int64}
+  is_nested::Int64
   Instance(np,nc,nM,c) = new(Int64(np),Int64(nc),Int64(nM),Int64(c),
                            zeros(Float64,nM),
                            zeros(Float64,np),zeros(Float64,nc),
                            zeros(Bool,nc,np),zeros(Float64,nc,np),
-                           zeros(Int64,np));
+                           zeros(Int64,np),0);
 end
 
 function Initialization_cdf!(I::Instance, distribution_type::String)
+  #=
+  Initionalization of demand M
+  =#
   if distribution_type == "Normal"
     I.demand_cdf = cumsum(pdf(Truncated(Normal(30,40),1,I.M),1:I.M))
     I.demand_cdf = I.demand_cdf/I.demand_cdf[I.M]
@@ -33,7 +37,9 @@ function Initialization_cdf!(I::Instance, distribution_type::String)
     for i = 2:I.M
       I.demand_cdf[i] = maximum(I.demand_cdf[1:i])
     end
-    #println(I.demand_cdf)
+  elseif distribution_type == "Poisson"
+    I.demand_cdf = cumsum(pdf(Truncated(Poisson(0.02),1,I.M),1:I.M))
+    I.demand_cdf = I.demand_cdf/I.demand_cdf[I.M]
   elseif distribution_type == "NonIFR"
     failure_rates = 6.0/float(I.M)*rand(I.M)
     failure_rates[I.M] = 1.
@@ -57,10 +63,13 @@ function Initialization_cdf!(I::Instance, distribution_type::String)
   end
 end
 
+
 function Initialization!(I::Instance, model_type::String, bernouilli_param::Float64 = 0.35)
-  #Initializes the intance, filling with numerical values
+  #=
+  Initialization of the choice model instance
+  =#
   randn!(I.prices)
-  I.prices = sort(exp(I.prices))
+  I.prices = sort(exp(0.3*I.prices))
   randn!(I.lambdas)
   I.lambdas = exp(I.lambdas)
   I.lambdas = I.lambdas/sum(I.lambdas)
@@ -74,6 +83,7 @@ function Initialization!(I::Instance, model_type::String, bernouilli_param::Floa
     end
 
   elseif model_type == "Nested"
+    I.is_nested = 1
     for j = 1:min(I.nb_cst_type,I.nb_prod)
       for i = 1:I.nb_prod
         if i <= j
@@ -91,17 +101,6 @@ function Initialization!(I::Instance, model_type::String, bernouilli_param::Floa
       I.lambdas[1:I.nb_prod] = I.lambdas[1:I.nb_prod]/sum(I.lambdas[1:I.nb_prod])
     end
 
-    ##Non IFR distribution
-    # failure_rates = 3./float(I.M)*rand(I.M)
-    # failure_rates[I.M] = 1.
-    # for j = 1:I.M
-    #   if j == 1
-    #     I.demand_cdf[j] = failure_rates[j]
-    #   else
-    #     I.demand_cdf[j] = failure_rates[j]*(1-I.demand_cdf[j-1]) + I.demand_cdf[j-1]
-    #   end
-    # end
-
   elseif model_type == "Intervals"
     for j = 1:I.nb_cst_type
       ia = sample(1:I.nb_prod)
@@ -117,7 +116,35 @@ function Initialization!(I::Instance, model_type::String, bernouilli_param::Floa
 
 end
 
+
+function log_instance(I::Instance,d::String,m::String,n::String)
+  #=
+  Instance logs
+  =#
+  npzwrite(string("instances/I-demand_cdf-",d,m,n,".npz"),I.demand_cdf)
+  npzwrite(string("instances/I-prices-",d,m,n,".npz"),I.prices)
+  npzwrite(string("instances/I-lambdas-",d,m,n,".npz"),I.lambdas)
+  npzwrite(string("instances/I-consideration_sets-",d,m,n,".npz"),1.0*I.consideration_sets)
+  npzwrite(string("instances/I-rankings-",d,m,n,".npz"),I.rankings)
+end
+
+
+function eval_revenue(I::Instance,U::Vector{Int64},sample = 500)
+  #=
+  Revenue evaluation
+  =#
+  if I.is_nested >0
+    return(exact_revenue(I,U))
+  else
+    return(approximate_revenue(I,U,sample))
+  end
+end
+
+
 function exact_revenue(I::Instance, U::Vector{Int64})
+  #=
+  Exact revenue evaluation for the nested model
+  =#
    current_capacity = sum(U)
    prod_of_unit = zeros(Int64,current_capacity)
    for i = 1:current_capacity
@@ -146,6 +173,7 @@ function exact_revenue(I::Instance, U::Vector{Int64})
    end
    return(rev)
 end
+
 
 function sample_revenue(I::Instance,U::Vector{Int64})
   for i = 1:I.nb_prod
@@ -176,6 +204,10 @@ function sample_revenue(I::Instance,U::Vector{Int64})
   return(revenue)
 end
 
+
 function approximate_revenue(I::Instance,U::Vector{Int64},iterations::Int64=100)
+  #=
+  Approximate revenue evaluation from sample average
+  =#
   return(sum(map(x -> sample_revenue(I,U), 1:iterations))/iterations)
 end
