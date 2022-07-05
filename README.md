@@ -20,4 +20,4 @@ NPZ 0.2.0
 
 `approx.jl`: implementation of heuristics and approximations for the general rank-based model and nested choice model.
 
-Usage examples are provided in `main.jl`. A benchmark of instances is provided in the folder `instances` and the corresponding method outputs are provided in the folder `outputs` .
+Usage examples are provided in `main.jl`. A benchmark of instances is provided in the folder `instances` and the corresponding method outputs are provided in the folder `outputs`.
